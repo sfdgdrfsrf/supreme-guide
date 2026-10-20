@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>F3X Creator Store Search</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--text:#16181d;--muted:#5d6472;--line:#dde1e8;--accent:#2563eb;color-scheme:light}
+@media (prefers-color-scheme:dark){:root{--bg:#111318;--card:#1a1d24;--text:#eceef2;--muted:#9aa3b2;--line:#2c313c;--accent:#6ea0ff;color-scheme:dark}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,sans-serif}
+main{max-width:960px;margin:0 auto;padding:24px 16px}
+h1{font-size:1.5rem;margin:0 0 4px}
+p.sub{margin:0 0 20px;color:var(--muted)}
+form{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+input,button{font:inherit;padding:10px 12px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--text)}
+#q{flex:1;min-width:200px}
+button{background:var(--accent);color:#fff;border-color:var(--accent);cursor:pointer}
+details{margin-bottom:16px;color:var(--muted)}
+details input{width:100%;margin-top:6px}
+#status{min-height:1.5em;color:var(--muted)}
+#status.err{color:#d93025}
+#grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px;margin-top:8px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden;display:flex;flex-direction:column}
+.card img,.ph{width:100%;aspect-ratio:1;object-fit:cover;background:var(--line)}
+.card div{padding:10px;font-size:.9rem}
+.card b{display:block;overflow-wrap:anywhere}
+.card span{color:var(--muted);font-size:.8rem}
+.card button{margin-top:8px;padding:4px 8px;font-size:.8rem;background:transparent;color:var(--accent)}
+</style>
+</head>
+<body>
+<main>
+  <h1>F3X Creator Store Search</h1>
+  <p class="sub">Search Roblox Creator Store models through your Cloudflare Worker.</p>
+  <form id="f">
+    <input id="q" placeholder="Search models, e.g. spongebob statue" minlength="2" required>
+    <button>Search</button>
+  </form>
+  <details>
+    <summary>API settings</summary>
+    <input id="base" placeholder="https://f3x-creator-store-api.YOUR-SUBDOMAIN.workers.dev">
+  </details>
+  <div id="status" role="status"></div>
+  <div id="grid"></div>
+</main>
+<script>
+// Set your deployed Worker URL here, or paste it in the settings box above.
+const DEFAULT_API_BASE = "";
+const $ = id => document.getElementById(id);
+const base = $("base");
+try { base.value = localStorage.getItem("apiBase") || DEFAULT_API_BASE; } catch { base.value = DEFAULT_API_BASE; }
+base.addEventListener("change", () => { try { localStorage.setItem("apiBase", base.value.trim()); } catch {} });
+
+function setStatus(msg, err) { $("status").textContent = msg; $("status").className = err ? "err" : ""; }
+
+$("f").addEventListener("submit", async e => {
+  e.preventDefault();
+  const api = base.value.trim().replace(/\/+$/, "");
+  if (!/^https:\/\//.test(api)) { setStatus("Enter your Worker URL (https://…) under API settings.", true); return; }
+  setStatus("Searching…");
+  $("grid").replaceChildren();
+  try {
+    const r = await fetch(`${api}/api/search?q=${encodeURIComponent($("q").value.trim())}&limit=24`);
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+    setStatus(d.count ? `${d.count} result(s)` : "No results.");
+    for (const a of d.assets) {
+      const c = document.createElement("div"); c.className = "card";
+      let img;
+      if (typeof a.thumbnailUrl === "string" && a.thumbnailUrl.startsWith("https://")) { img = document.createElement("img"); img.src = a.thumbnailUrl; img.alt = ""; img.loading = "lazy"; }
+      else { img = document.createElement("div"); img.className = "ph"; }
+      const t = document.createElement("div");
+      const n = document.createElement("b"); n.textContent = a.name;
+      const s = document.createElement("span"); s.textContent = `ID ${a.id}${a.creatorName ? " · " + a.creatorName : ""}`;
+      const b = document.createElement("button"); b.type = "button"; b.textContent = "Copy ID";
+      b.onclick = () => navigator.clipboard?.writeText(a.id).then(() => { b.textContent = "Copied"; });
+      t.append(n, s, b); c.append(img, t); $("grid").append(c);
+    }
+  } catch (err) { setStatus("Search failed: " + err.message, true); }
+});
+</script>
+</body>
+</html>
