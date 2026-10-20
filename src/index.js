@@ -1,3 +1,4 @@
+
 const ROBLOX_SEARCH = "https://apis.roblox.com/toolbox-service/v2/assets:search";
 
 function corsHeaders(origin = "*") {
@@ -7,7 +8,7 @@ function corsHeaders(origin = "*") {
     "Access-Control-Allow-Headers": "Content-Type",
     "Access-Control-Max-Age": "86400",
     "Content-Type": "application/json; charset=utf-8",
-    "Cache-Control": "public, max-age=30, s-maxage=30",
+    "Cache-Control": "public, max-age=30",
     "Vary": "Origin",
   };
 }
@@ -20,9 +21,13 @@ function json(data, status = 200, origin = "*") {
 }
 
 function firstArray(payload) {
-  // The service response has changed shape over time; accept common wrappers,
-  // but don't fabricate results when no array exists.
-  for (const key of ["data", "assets", "results", "items"]) {
+  for (const key of [
+    "creatorStoreAssets",
+    "data",
+    "assets",
+    "results",
+    "items",
+  ]) {
     if (Array.isArray(payload?.[key])) return payload[key];
   }
   if (Array.isArray(payload)) return payload;
@@ -30,20 +35,28 @@ function firstArray(payload) {
 }
 
 function normalizeAsset(item) {
-  const id = item?.id ?? item?.assetId ?? item?.asset?.id;
-  if (id === undefined || id === null) return null;
-  const creator = item?.creator ?? item?.creatorInfo ?? {};
-  const thumbnail = item?.thumbnail ?? item?.thumbnailUrl ?? item?.imageUrl ?? null;
+  const asset = item?.asset ?? item;
+  const creator = item?.creator ?? {};
+
+  const id = asset?.id ?? item?.id ?? item?.assetId;
+  if (id == null) return null;
+
+  const previews = asset?.previewAssets;
+  const imagePreview = previews?.imagePreviewAssets?.[0];
+
   return {
     id: String(id),
-    name: item?.name ?? item?.title ?? item?.asset?.name ?? "Untitled model",
-    description: item?.description ?? item?.asset?.description ?? "",
-    thumbnailUrl: typeof thumbnail === "string"
-      ? thumbnail
-      : (thumbnail?.url ?? thumbnail?.imageUrl ?? null),
+    name: asset?.name ?? item?.name ?? "Untitled model",
+    description: asset?.description ?? item?.description ?? "",
+    thumbnailUrl:
+      imagePreview?.imageUrl ??
+      imagePreview?.url ??
+      asset?.thumbnailUrl ??
+      item?.thumbnailUrl ??
+      null,
     creatorName: creator?.name ?? item?.creatorName ?? "",
-    creatorId: creator?.id ?? item?.creatorId ?? null,
-    assetType: item?.assetType ?? item?.assetTypeName ?? "Model",
+    creatorId: creator?.userId ?? creator?.id ?? item?.creatorId ?? null,
+    assetType: "Model",
   };
 }
 
@@ -53,54 +66,68 @@ export default {
     const origin = request.headers.get("Origin") || "*";
 
     if (request.method === "OPTIONS") {
-      return new Response(null, { status: 204, headers: corsHeaders(origin) });
+      return new Response(null, {
+        status: 204,
+        headers: corsHeaders(origin),
+      });
     }
 
     if (url.pathname === "/health") {
-      return json({ ok: true, service: "f3x-creator-store-api" }, 200, origin);
+      return json({
+        ok: true,
+        service: "f3x-creator-store-api",
+      }, 200, origin);
     }
 
     if (url.pathname !== "/api/search") {
-      return json({ error: "Not found", endpoints: ["/health", "/api/search?q=..."] }, 404, origin);
-    }
-
-    if (request.method !== "GET") {
-      return json({ error: "Method not allowed. Use GET." }, 405, origin);
+      return json({
+        error: "Not found",
+        endpoints: ["/health", "/api/search?q=spongebob%20statue"],
+      }, 404, origin);
     }
 
     const query = (url.searchParams.get("q") || "").trim().slice(0, 120);
+
     if (query.length < 2) {
-      return json({ error: "Query 'q' must contain at least 2 characters." }, 400, origin);
+      return json({
+        error: "Enter at least 2 search characters.",
+      }, 400, origin);
     }
 
-    const limit = Math.max(1, Math.min(50, Number.parseInt(url.searchParams.get("limit") || "25", 10) || 25));
-    const pageNumber = Math.max(0, Math.min(1000, Number.parseInt(url.searchParams.get("pageNumber") || "0", 10) || 0));
-    const verified = url.searchParams.get("includeOnlyVerifiedCreators") || "false";
+    const limit = Math.max(
+      1,
+      Math.min(
+        50,
+        Number.parseInt(url.searchParams.get("limit") || "25", 10) || 25
+      )
+    );
 
     const upstream = new URL(ROBLOX_SEARCH);
     upstream.searchParams.set("searchCategoryType", "Model");
     upstream.searchParams.set("query", query);
     upstream.searchParams.set("maxPageSize", String(limit));
-    upstream.searchParams.set("pageNumber", String(pageNumber));
+    upstream.searchParams.set(
+      "pageNumber",
+      String(Math.max(0, Number.parseInt(url.searchParams.get("pageNumber") || "0", 10) || 0))
+    );
     upstream.searchParams.set("searchView", "Full");
-    upstream.searchParams.set("includeOnlyVerifiedCreators", verified === "true" ? "true" : "false");
+    upstream.searchParams.set("includeOnlyVerifiedCreators", "false");
 
     try {
       const response = await fetch(upstream.toString(), {
-        method: "GET",
-        headers: { "Accept": "application/json" },
-        cf: { cacheTtl: 30, cacheEverything: true },
+        headers: { Accept: "application/json" },
       });
 
       const bodyText = await response.text();
       let payload;
+
       try {
         payload = JSON.parse(bodyText);
       } catch {
         return json({
-          error: "Roblox returned a non-JSON response.",
+          error: "Roblox returned an invalid response.",
           upstreamStatus: response.status,
-          details: bodyText.slice(0, 400),
+          details: bodyText.slice(0, 300),
         }, 502, origin);
       }
 
@@ -113,26 +140,30 @@ export default {
       }
 
       const raw = firstArray(payload);
+
       if (!raw) {
         return json({
-          error: "Roblox response format was not recognized; no results were fabricated.",
-          upstreamKeys: payload && typeof payload === "object" ? Object.keys(payload) : [],
-          upstream: payload,
+          error: "Unrecognized Roblox response format.",
+          upstreamKeys: Object.keys(payload || {}),
         }, 502, origin);
       }
 
       const assets = raw.map(normalizeAsset).filter(Boolean);
+
       return json({
         ok: true,
         query,
         count: assets.length,
-        nextPageToken: payload?.nextPageToken ?? payload?.nextPageCursor ?? null,
+        totalResults: payload?.totalResults ?? assets.length,
+        nextPageToken: payload?.nextPageToken ?? null,
         assets,
-        // Include the raw payload during early testing so schema changes are diagnosable.
-        upstreamKeys: payload && typeof payload === "object" ? Object.keys(payload) : [],
       }, 200, origin);
+
     } catch (error) {
-      return json({ error: "Could not reach Roblox Creator Store.", details: String(error) }, 502, origin);
+      return json({
+        error: "Could not reach Roblox Creator Store.",
+        details: String(error),
+      }, 502, origin);
     }
   },
 };
